@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sitemap Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.7.7/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.5/dist/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.6/babel.min.js"></script>
+</head>
+<body class="bg-gray-100 font-sans">
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        function App() {
+            const [tld, setTld] = useState('');
+            const [apiToken, setApiToken] = useState('');
+            const [respectRobots, setRespectRobots] = useState(true);
+            const [timeout, setTimeout] = useState('5');
+            const [logs, setLogs] = useState([]);
+            const [isGenerating, setIsGenerating] = useState(false);
+            const [showModal, setShowModal] = useState(false);
+            const [estimatedTime, setEstimatedTime] = useState(0);
+            const [generationCompleted, setGenerationCompleted] = useState(false);
+            const logRef = useRef(null);
+            const socketRef = useRef(null);
+
+            useEffect(() => {
+                // Initialize Socket.IO
+                socketRef.current = io();
+                socketRef.current.on('log', (data) => {
+                    setLogs((prev) => [...prev, data.message]);
+                });
+
+                // Check generation status
+                const checkStatus = () => {
+                    axios.get('/status').then((response) => {
+                        setIsGenerating(response.data.is_generating);
+                        if (!response.data.is_generating && isGenerating) {
+                            setGenerationCompleted(true);
+                            setShowModal(false);
+                        }
+                    });
+                };
+                checkStatus();
+
+                // Poll for status and progress
+                const interval = setInterval(() => {
+                    checkStatus();
+                    if (isGenerating) {
+                        axios.get('/progress').then((response) => {
+                            setEstimatedTime(response.data.estimated_time);
+                        });
+                    }
+                }, 1000);
+
+                return () => {
+                    socketRef.current.disconnect();
+                    clearInterval(interval);
+                };
+            }, [isGenerating]);
+
+            useEffect(() => {
+                // Scroll to bottom of logs
+                if (logRef.current) {
+                    logRef.current.scrollTop = logRef.current.scrollHeight;
+                }
+            }, [logs]);
+
+            const handleStart = () => {
+                axios.post('/start', {
+                    tld,
+                    api_token: apiToken,
+                    respect_robots: respectRobots,
+                    timeout
+                }).then((response) => {
+                    setIsGenerating(true);
+                    setGenerationCompleted(false);
+                    setLogs([]);
+                    setShowModal(true);
+                }).catch((error) => {
+                    setLogs((prev) => [...prev, `Error: ${error.response?.data?.error || error.message}`]);
+                });
+            };
+
+            const handleDownload = () => {
+                window.location.href = '/download';
+            };
+
+            const closeModal = () => {
+                setShowModal(false);
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-2xl relative">
+                        <h1 className="text-2xl font-semibold text-gray-800 mb-6">Sitemap Generator</h1>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-gray-700">Top-Level Domain (e.g., techfixpro.net)</label>
+                                <input
+                                    type="text"
+                                    value={tld}
+                                    onChange={(e) => setTld(e.target.value)}
+                                    className="mt-1 w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-gray-300"
+                                    disabled={isGenerating}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Cloudflare API Token</label>
+                                <input
+                                    type="password"
+                                    value={apiToken}
+                                    onChange={(e) => setApiToken(e.target.value)}
+                                    className="mt-1 w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-gray-300"
+                                    disabled={isGenerating}
+                                />
+                            </div>
+                            <div className="flex items-center">
+                                <input
+                                    type="checkbox"
+                                    checked={respectRobots}
+                                    onChange={(e) => setRespectRobots(e.target.checked)}
+                                    className="h-4 w-4 text-gray-600 focus:ring-gray-300"
+                                    disabled={isGenerating}
+                                />
+                                <label className="ml-2 text-gray-700">Respect robots.txt</label>
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Timeout (seconds, default: 5)</label>
+                                <input
+                                    type="text"
+                                    value={timeout}
+                                    onChange={(e) => setTimeout(e.target.value)}
+                                    className="mt-1 w-24 p-2 border rounded focus:outline-none focus:ring-2 focus:ring-gray-300"
+                                    disabled={isGenerating}
+                                />
+                            </div>
+                            <button
+                                onClick={handleStart}
+                                className={`w-full py-2 rounded text-white font-semibold ${
+                                    isGenerating ? 'bg-gray-400 cursor-not-allowed' : 'bg-gray-600 hover:bg-gray-700'
+                                } transition-colors`}
+                                disabled={isGenerating}
+                            >
+                                {isGenerating ? 'Generating...' : 'Generate Sitemap'}
+                            </button>
+                            {generationCompleted && (
+                                <button
+                                    onClick={handleDownload}
+                                    className="w-full py-2 rounded text-white font-semibold bg-blue-600 hover:bg-blue-700 transition-colors"
+                                >
+                                    Download Sitemap
+                                </button>
+                            )}
+                        </div>
+                        {isGenerating && (
+                            <div className="mt-4 flex items-center justify-center">
+                                <svg className="animate-spin h-6 w-6 text-gray-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                <span className="ml-2 text-gray-700">Estimated time remaining: {estimatedTime} seconds</span>
+                            </div>
+                        )}
+                        {generationCompleted && (
+                            <div className="mt-4 text-center text-green-600 font-semibold">
+                                Sitemap generation completed!
+                            </div>
+                        )}
+                        <div className="mt-6">
+                            <label className="block text-gray-700">Logs</label>
+                            <div
+                                ref={logRef}
+                                className="mt-1 h-40 bg-gray-50 p-2 border rounded overflow-y-auto font-mono text-sm text-gray-800"
+                            >
+                                {logs.length === 0 && !isGenerating ? (
+                                    <div>No logs yet. Start generation to see logs.</div>
+                                ) : (
+                                    logs.map((log, index) => (
+                                        <div key={index}>{log}</div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                        {showModal && (
+                            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                                <div className="bg-white rounded-lg p-6 max-w-md w-full">
+                                    <h2 className="text-xl font-semibold text-gray-800 mb-4">Processing Your Request</h2>
+                                    <p className="text-gray-700 mb-6">
+                                        This may take a while depending on how big the site is, hold tight!
+                                    </p>
+                                    <button
+                                        onClick={closeModal}
+                                        className="w-full py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition-colors"
+                                    >
+                                        OK
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
