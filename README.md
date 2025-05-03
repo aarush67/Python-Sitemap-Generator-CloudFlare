@@ -76,10 +76,10 @@ To use the script, you need a Cloudflare API token with "Edit Zone DNS" permissi
 ## Usage
 
 1. **Run the Script**
-   - Ensure you’re in the directory containing `generate_sitemap.py` and your virtual environment is activated.
+   - Ensure you’re in the directory containing `main.py` and your virtual environment is activated.
    - Run the script:
      ```bash
-     python3 generate_sitemap.py
+     python3 main.py
      ```
 
 2. **Provide Inputs**
