@@ -25,8 +25,8 @@ This Python script generates a sitemap (`sitemap.xml`) for a specified domain by
    - Download the script (`generate_sitemap.py`) and `requirements.txt` to a local directory.
    - Alternatively, clone the repository if hosted on a platform like GitHub:
      ```bash
-     git clone <repository-url>
-     cd <repository-directory>
+     git clone https://github.com/aarush67/Sitemap-Generator-CloudFlare.git
+     cd Sitemap-Generator-CloudFlare
      ```
 
 2. **Set Up a Virtual Environment (Recommended)**
@@ -38,9 +38,9 @@ This Python script generates a sitemap (`sitemap.xml`) for a specified domain by
 
 3. **Install Dependencies**
    - Ensure `requirements.txt` is in the same directory as the script. It includes:
-     - `requests==2.32.3`
-     - `beautifulsoup4==4.12.3`
-     - `dnspython==2.6.1`
+     - `requests`
+     - `beautifulsoup`
+     - `dnspython`
    - Install the dependencies:
      ```bash
      pip install -r requirements.txt
