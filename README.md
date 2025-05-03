@@ -25,8 +25,8 @@ This Python script generates a sitemap (`sitemap.xml`) for a specified domain by
    - Download the script (`generate_sitemap.py`) and `requirements.txt` to a local directory.
    - Alternatively, clone the repository if hosted on a platform like GitHub:
      ```bash
-     git clone https://github.com/aarush67/Sitemap-Generator-CloudFlare.git
-     cd Sitemap-Generator-CloudFlare
+     git clone https://github.com/aarush67/Python-Sitemap-Generator-CloudFlare.git
+     cd Python-Sitemap-Generator-CloudFlare
      ```
 
 2. **Set Up a Virtual Environment (Recommended)**
