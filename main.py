@@ -12,10 +12,7 @@ import time
 import random
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-
-# Set up logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+import argparse
 
 def create_session():
     """Create a requests session with retries."""
@@ -36,23 +33,27 @@ def get_user_agent():
     ]
     return random.choice(user_agents)
 
-def is_valid_url(url, session, respect_robots=True, timeout=5):
+def is_valid_url(url, session, respect_robots=True, timeout=5, logger=None):
     """Check if the URL is valid and accessible."""
+    if logger is None:
+        logger = logging.getLogger(__name__)
     headers = {"User-Agent": get_user_agent()}
     try:
         response = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
         content_type = response.headers.get('content-type', '').lower()
         logger.info(f"URL {url} returned status {response.status_code}, content-type: {content_type}")
         if respect_robots and response.status_code in [200, 301, 302, 403, 404]:
-            if not is_allowed_by_robots(url, session, headers["User-Agent"], timeout):
+            if not is_allowed_by_robots(url, session, headers["User-Agent"], timeout, logger):
                 return False
         return True
     except requests.RequestException as e:
         logger.error(f"Failed to validate URL {url}: {e}")
         return False
 
-def resolve_domain(domain):
+def resolve_domain(domain, logger=None):
     """Check if domain resolves via DNS."""
+    if logger is None:
+        logger = logging.getLogger(__name__)
     resolver = dns.resolver.Resolver()
     try:
         resolver.resolve(domain, 'A')
@@ -71,8 +72,10 @@ def get_root_domain(url):
         return '.'.join(domain_parts[-2:])
     return parsed.netloc
 
-def is_allowed_by_robots(url, session, user_agent, timeout):
+def is_allowed_by_robots(url, session, user_agent, timeout, logger=None):
     """Check if URL is allowed by robots.txt for its domain."""
+    if logger is None:
+        logger = logging.getLogger(__name__)
     parsed = urlparse(url)
     robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
     rp = RobotFileParser()
@@ -93,8 +96,10 @@ def clean_url(url):
     parsed = urlparse(url)
     return f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip('/')
 
-def get_cloudflare_dns_records(tld, api_token):
+def get_cloudflare_dns_records(tld, api_token, logger=None):
     """Retrieve all DNS records from Cloudflare API."""
+    if logger is None:
+        logger = logging.getLogger(__name__)
     headers = {
         "Authorization": f"Bearer {api_token}",
         "Content-Type": "application/json"
@@ -134,10 +139,12 @@ def get_cloudflare_dns_records(tld, api_token):
 
     return dns_records
 
-def discover_subdomains(tld, api_token, session, respect_robots=True, timeout=5):
+def discover_subdomains(tld, api_token, session, respect_robots=True, timeout=5, logger=None, progress=None):
     """Discover subdomains via Cloudflare DNS, wordlist, and crt.sh."""
+    if logger is None:
+        logger = logging.getLogger(__name__)
     subdomains = set()
-    
+
     # Extended subdomain wordlist
     common_subdomains = [
         "", "www", "blog", "shop", "store", "api", "mail", "dev", "app", "login",
@@ -149,18 +156,24 @@ def discover_subdomains(tld, api_token, session, respect_robots=True, timeout=5)
         "community", "events", "jobs", "careers", "about", "contact", "privacy", "terms"
     ]
 
+    # Set total subdomains for estimation
+    if progress is not None:
+        progress['total_subdomains'] = len(common_subdomains) + 50  # Approx. crt.sh + DNS records
+
     # 1. Cloudflare DNS records
     logger.info("Fetching DNS records from Cloudflare")
-    dns_records = get_cloudflare_dns_records(tld, api_token)
+    dns_records = get_cloudflare_dns_records(tld, api_token, logger)
     for record in dns_records:
         name = record["name"]
         if name.endswith(tld) and not name.startswith(('_', '*')):  # Skip DMARC, DKIM, etc.
-            if resolve_domain(name):  # Check if domain resolves
+            if resolve_domain(name, logger):  # Check if domain resolves
                 subdomain = f"https://{name}"
                 time.sleep(random.uniform(0.5, 1.5))  # Delay to avoid rate-limiting
-                if is_valid_url(subdomain, session, respect_robots, timeout):
+                if is_valid_url(subdomain, session, respect_robots, timeout, logger):
                     subdomains.add(subdomain)
                     logger.info(f"Found subdomain from Cloudflare DNS: {subdomain}")
+                    if progress is not None:
+                        progress['subdomains_found'] += 1
                 else:
                     logger.warning(f"Skipping non-accessible subdomain: {subdomain}")
 
@@ -168,12 +181,14 @@ def discover_subdomains(tld, api_token, session, respect_robots=True, timeout=5)
     logger.info("Brute-forcing subdomains with wordlist")
     for subdomain in common_subdomains:
         domain = f"{subdomain}.{tld}" if subdomain else tld
-        if resolve_domain(domain):  # Check if domain resolves
+        if resolve_domain(domain, logger):  # Check if domain resolves
             url = f"https://{domain}"
             time.sleep(random.uniform(0.5, 1.5))  # Delay to avoid rate-limiting
-            if is_valid_url(url, session, respect_robots, timeout):
+            if is_valid_url(url, session, respect_robots, timeout, logger):
                 subdomains.add(url)
                 logger.info(f"Found subdomain from wordlist: {url}")
+                if progress is not None:
+                    progress['subdomains_found'] += 1
             else:
                 logger.warning(f"Skipping non-accessible subdomain: {url}")
 
@@ -189,12 +204,14 @@ def discover_subdomains(tld, api_token, session, respect_robots=True, timeout=5)
                     continue
                 if name.startswith("*."):
                     name = name[2:]  # Remove wildcard
-                if name.endswith(tld) and resolve_domain(name):  # Check if domain resolves
+                if name.endswith(tld) and resolve_domain(name, logger):  # Check if domain resolves
                     url = f"https://{name}"
                     time.sleep(random.uniform(0.5, 1.5))  # Delay to avoid rate-limiting
-                    if is_valid_url(url, session, respect_robots, timeout):
+                    if is_valid_url(url, session, respect_robots, timeout, logger):
                         subdomains.add(url)
                         logger.info(f"Found subdomain from crt.sh: {url}")
+                        if progress is not None:
+                            progress['subdomains_found'] += 1
                     else:
                         logger.warning(f"Skipping non-accessible subdomain: {url}")
     except Exception as e:
@@ -202,8 +219,10 @@ def discover_subdomains(tld, api_token, session, respect_robots=True, timeout=5)
 
     return subdomains
 
-def crawl_url(url, session, visited, collected_urls, root_domain, respect_robots=True, timeout=5):
+def crawl_url(url, session, visited, collected_urls, root_domain, respect_robots=True, timeout=5, logger=None, progress=None):
     """Crawl a single URL and return found links."""
+    if logger is None:
+        logger = logging.getLogger(__name__)
     if url in visited:
         return []
 
@@ -222,6 +241,8 @@ def crawl_url(url, session, visited, collected_urls, root_domain, respect_robots
         return []
 
     collected_urls.add(clean_url(url))
+    if progress is not None:
+        progress['urls_crawled'] += 1
     found_urls = []
     if 'text/html' in content_type:
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -237,13 +258,15 @@ def crawl_url(url, session, visited, collected_urls, root_domain, respect_robots
                 continue
 
             cleaned_url = clean_url(absolute_url)
-            if is_valid_url(cleaned_url, session, respect_robots, timeout) and cleaned_url not in visited:
+            if is_valid_url(cleaned_url, session, respect_robots, timeout, logger) and cleaned_url not in visited:
                 found_urls.append(cleaned_url)
 
     return found_urls
 
-def crawl_website(start_urls, root_domain, respect_robots=True, timeout=5):
+def crawl_website(start_urls, root_domain, respect_robots=True, timeout=5, logger=None, progress=None):
     """Crawl the website and subdomains sequentially."""
+    if logger is None:
+        logger = logging.getLogger(__name__)
     visited = set()
     collected_urls = set()
     session = create_session()
@@ -252,15 +275,17 @@ def crawl_website(start_urls, root_domain, respect_robots=True, timeout=5):
         url_queue = [start_url]
         while url_queue:
             url = url_queue.pop(0)
-            new_urls = crawl_url(url, session, visited, collected_urls, root_domain, respect_robots, timeout)
+            new_urls = crawl_url(url, session, visited, collected_urls, root_domain, respect_robots, timeout, logger, progress)
             url_queue.extend([u for u in new_urls if u not in visited])
 
     return collected_urls
 
-def generate_sitemap(urls, output_file="sitemap.xml"):
+def generate_sitemap(urls, output_file="sitemap.xml", logger=None):
     """Generate sitemap.xml from a set of URLs."""
+    if logger is None:
+        logger = logging.getLogger(__name__)
     urlset = ET.Element("urlset", xmlns="http://www.sitemaps.org/schemas/sitemap/0.9")
-    
+
     for url in sorted(urls):
         url_element = ET.SubElement(urlset, "url")
         loc = ET.SubElement(url_element, "loc")
@@ -277,18 +302,49 @@ def generate_sitemap(urls, output_file="sitemap.xml"):
     tree.write(output_file, encoding="utf-8", xml_declaration=True)
     logger.info(f"Sitemap generated: {output_file}")
 
-def main():
-    # Prompt for top-level domain, API token, robots.txt preference, and timeout
-    tld = input("Enter the top-level domain (e.g., techfixpro.net): ").strip()
+def run_sitemap_generation(tld, api_token, respect_robots=True, timeout=5, logger=None, progress=None):
+    """Run the sitemap generation process."""
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
     if not tld:
         logger.error("No domain provided. Exiting.")
         return
-    
-    api_token = getpass.getpass("Enter your Cloudflare API token You can get one by going to your main cloudflare dashboard and clicking profile and then API Tokens Click Create Token and use Edit zone DNS as the teplate and change Zone Resources from Specific Zone to All Zones and click Continue to Summary and then click Create Token and copy the token and input it in here: ").strip()
+
     if not api_token:
         logger.error("No API token provided. Exiting.")
         return
 
+    logger.info(f"Using timeout: {timeout} seconds")
+
+    # Create session for subdomain discovery
+    session = create_session()
+
+    # Discover subdomains
+    logger.info(f"Discovering subdomains for {tld}")
+    start_urls = discover_subdomains(tld, api_token, session, respect_robots, timeout, logger, progress)
+    if not start_urls:
+        logger.error(f"No accessible subdomains found for {tld}. Exiting.")
+        return
+
+    root_domain = tld
+    logger.info(f"Starting sitemap generation for {tld} including all subdomains")
+    urls = crawl_website(start_urls, root_domain, respect_robots, timeout, logger, progress)
+    if not urls:
+        logger.warning("No URLs were crawled. Sitemap may be empty.")
+    generate_sitemap(urls, logger=logger)
+    logger.info(f"Found {len(urls)} unique pages across main domain and subdomains.")
+
+def main_cli():
+    """Run the sitemap generator in CLI mode."""
+    # Set up logging for CLI mode
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logger = logging.getLogger(__name__)
+
+    tld = input("Enter the top-level domain (e.g., techfixpro.net): ").strip()
+    api_token = getpass.getpass(
+        "Enter your Cloudflare API token (Get one from Cloudflare dashboard > Profile > API Tokens > Create Token > Edit zone DNS template > All Zones > Create Token): "
+    ).strip()
     respect_robots_input = input("Respect robots.txt? (y/n, default: y): ").strip().lower()
     respect_robots = respect_robots_input != 'n'
 
@@ -300,25 +356,37 @@ def main():
     except ValueError as e:
         logger.warning(f"Invalid timeout input: {e}. Using default timeout of 5 seconds.")
         timeout = 5
-    logger.info(f"Using timeout: {timeout} seconds")
 
-    # Create session for subdomain discovery
-    session = create_session()
+    run_sitemap_generation(tld, api_token, respect_robots, timeout, logger)
 
-    # Discover subdomains
-    logger.info(f"Discovering subdomains for {tld}")
-    start_urls = discover_subdomains(tld, api_token, session, respect_robots, timeout)
-    if not start_urls:
-        logger.error(f"No accessible subdomains found for {tld}. Exiting.")
-        return
-    
-    root_domain = tld
-    logger.info(f"Starting sitemap generation for {tld} including all subdomains")
-    urls = crawl_website(start_urls, root_domain, respect_robots, timeout)
-    if not urls:
-        logger.warning("No URLs were crawled. Sitemap may be empty.")
-    generate_sitemap(urls)
-    logger.info(f"Found {len(urls)} unique pages across main domain and subdomains.")
+def main():
+    """Main entry point with CLI/WebUI mode selection."""
+    parser = argparse.ArgumentParser(description="Sitemap Generator for Cloudflare-hosted domains")
+    parser.add_argument("--webui", action="store_true", help="Run in WebUI mode")
+    args = parser.parse_args()
+
+    if args.webui:
+        try:
+            from app import run_webui
+            # Prompt for port customization
+            customize_port = input("Customize port? (y/n, default: n): ").strip().lower()
+            port = 5000  # Default port
+            if customize_port == 'y':
+                while True:
+                    port_input = input("What port? Enter number: ").strip()
+                    try:
+                        port = int(port_input)
+                        if not (1 <= port <= 65535):
+                            raise ValueError("Port must be between 1 and 65535")
+                        break
+                    except ValueError as e:
+                        print(f"Invalid port: {e}. Please enter a valid number.")
+            run_webui(port=port)
+        except ImportError:
+            print("WebUI module not found. Please ensure app.py is available.")
+            return
+    else:
+        main_cli()
 
 if __name__ == "__main__":
     main()
