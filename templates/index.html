@@ -21,6 +21,13 @@
             const [apiToken, setApiToken] = useState('');
             const [respectRobots, setRespectRobots] = useState(true);
             const [timeout, setTimeout] = useState('5');
+            const [useMultithreading, setUseMultithreading] = useState(false);
+            const [maxWorkers, setMaxWorkers] = useState('4');
+            const [maxDepth, setMaxDepth] = useState('5');
+            const [outputFile, setOutputFile] = useState('sitemap.xml');
+            const [includeSubdomains, setIncludeSubdomains] = useState('');
+            const [excludeSubdomains, setExcludeSubdomains] = useState('');
+            const [rateLimit, setRateLimit] = useState('1.0');
             const [logs, setLogs] = useState([]);
             const [isGenerating, setIsGenerating] = useState(false);
             const [showModal, setShowModal] = useState(false);
@@ -30,13 +37,11 @@
             const socketRef = useRef(null);
 
             useEffect(() => {
-                // Initialize Socket.IO
                 socketRef.current = io();
                 socketRef.current.on('log', (data) => {
                     setLogs((prev) => [...prev, data.message]);
                 });
 
-                // Check generation status
                 const checkStatus = () => {
                     axios.get('/status').then((response) => {
                         setIsGenerating(response.data.is_generating);
@@ -48,7 +53,6 @@
                 };
                 checkStatus();
 
-                // Poll for status and progress
                 const interval = setInterval(() => {
                     checkStatus();
                     if (isGenerating) {
@@ -65,7 +69,6 @@
             }, [isGenerating]);
 
             useEffect(() => {
-                // Scroll to bottom of logs
                 if (logRef.current) {
                     logRef.current.scrollTop = logRef.current.scrollHeight;
                 }
@@ -76,7 +79,14 @@
                     tld,
                     api_token: apiToken,
                     respect_robots: respectRobots,
-                    timeout
+                    timeout,
+                    use_multithreading: useMultithreading,
+                    max_workers: maxWorkers,
+                    max_depth: maxDepth,
+                    output_file: outputFile,
+                    include_subdomains: includeSubdomains,
+                    exclude_subdomains: excludeSubdomains,
+                    rate_limit: rateLimit
                 }).then((response) => {
                     setIsGenerating(true);
                     setGenerationCompleted(false);
@@ -88,7 +98,7 @@
             };
 
             const handleDownload = () => {
-                window.location.href = '/download';
+                window.location.href = `/download?output_file=${encodeURIComponent(outputFile)}`;
             };
 
             const closeModal = () => {
@@ -97,9 +107,9 @@
 
             return (
                 <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-2xl relative">
+                    <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-3xl relative">
                         <h1 className="text-2xl font-semibold text-gray-800 mb-6">Sitemap Generator</h1>
-                        <div className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label className="block text-gray-700">Top-Level Domain (e.g., techfixpro.net)</label>
                                 <input
@@ -120,16 +130,6 @@
                                     disabled={isGenerating}
                                 />
                             </div>
-                            <div className="flex items-center">
-                                <input
-                                    type="checkbox"
-                                    checked={respectRobots}
-                                    onChange={(e) => setRespectRobots(e.target.checked)}
-                                    className="h-4 w-4 text-gray-600 focus:ring-gray-300"
-                                    disabled={isGenerating}
-                                />
-                                <label className="ml-2 text-gray-700">Respect robots.txt</label>
-                            </div>
                             <div>
                                 <label className="block text-gray-700">Timeout (seconds, default: 5)</label>
                                 <input
@@ -140,6 +140,88 @@
                                     disabled={isGenerating}
                                 />
                             </div>
+                            <div>
+                                <label className="block text-gray-700">Output File (default: sitemap.xml)</label>
+                                <input
+                                    type="text"
+                                    value={outputFile}
+                                    onChange={(e) => setOutputFile(e.target.value)}
+                                    className="mt-1 w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-gray-300"
+                                    disabled={isGenerating}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Max Crawl Depth (default: 5)</label>
+                                <input
+                                    type="text"
+                                    value={maxDepth}
+                                    onChange={(e) => setMaxDepth(e.target.value)}
+                                    className="mt-1 w-24 p-2 border rounded focus:outline-none focus:ring-2 focus:ring-gray-300"
+                                    disabled={isGenerating}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Rate Limit (seconds, default: 1.0)</label>
+                                <input
+                                    type="text"
+                                    value={rateLimit}
+                                    onChange={(e) => setRateLimit(e.target.value)}
+                                    className="mt-1 w-24 p-2 border rounded focus:outline-none focus:ring-2 focus:ring-gray-300"
+                                    disabled={isGenerating}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Include Subdomains (comma-separated)</label>
+                                <input
+                                    type="text"
+                                    value={includeSubdomains}
+                                    onChange={(e) => setIncludeSubdomains(e.target.value)}
+                                    className="mt-1 w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-gray-300"
+                                    disabled={isGenerating}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Exclude Subdomains (comma-separated)</label>
+                                <input
+                                    type="text"
+                                    value={excludeSubdomains}
+                                    onChange={(e) => setExcludeSubdomains(e.target.value)}
+                                    className="mt-1 w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-gray-300"
+                                    disabled={isGenerating}
+                                />
+                            </div>
+                            <div className="flex items-center">
+                                <input
+                                    type="checkbox"
+                                    checked={respectRobots}
+                                    onChange={(e) => setRespectRobots(e.target.checked)}
+                                    className="h-4 w-4 text-gray-600 focus:ring-gray-300"
+                                    disabled={isGenerating}
+                                />
+                                <label className="ml-2 text-gray-700">Respect robots.txt</label>
+                            </div>
+                            <div className="flex items-center">
+                                <input
+                                    type="checkbox"
+                                    checked={useMultithreading}
+                                    onChange={(e) => setUseMultithreading(e.target.checked)}
+                                    className="h-4 w-4 text-gray-600 focus:ring-gray-300"
+                                    disabled={isGenerating}
+                                />
+                                <label className="ml-2 text-gray-700">Use Multithreading</label>
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Number of Cores (default: 4)</label>
+                                <input
+                                    type="text"
+                                    value={maxWorkers}
+                                    onChange={(e) => setMaxWorkers(e.target.value)}
+                                    className="mt-1 w-24 p-2 border rounded focus:outline-none focus:ring-2 focus:ring-gray-300"
+                                    disabled={isGenerating || !useMultithreading}
+                                />
+                            </div>
+                        </div>
+                        <div className="mt-4">
                             <button
                                 onClick={handleStart}
                                 className={`w-full py-2 rounded text-white font-semibold ${
@@ -152,7 +234,7 @@
                             {generationCompleted && (
                                 <button
                                     onClick={handleDownload}
-                                    className="w-full py-2 rounded text-white font-semibold bg-blue-600 hover:bg-blue-700 transition-colors"
+                                    className="w-full py-2 mt-2 rounded text-white font-semibold bg-blue-600 hover:bg-blue-700 transition-colors"
                                 >
                                     Download Sitemap
                                 </button>
@@ -192,7 +274,7 @@
                                 <div className="bg-white rounded-lg p-6 max-w-md w-full">
                                     <h2 className="text-xl font-semibold text-gray-800 mb-4">Processing Your Request</h2>
                                     <p className="text-gray-700 mb-6">
-                                        This may take a while depending on how big the site is, hold tight!
+                                        This may take a while depending on the site size and settings, hold tight!
                                     </p>
                                     <button
                                         onClick={closeModal}
