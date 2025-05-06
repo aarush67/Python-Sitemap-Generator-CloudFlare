@@ -1,6 +1,5 @@
-requests>=2.31.0
-beautifulsoup4>=4.12.3
-dnspython>=2.6.1
-lxml>=5.3.0
-flask>=3.0.3
-flask-socketio>=5.3.6
+requests
+beautifulsoup4
+dnspython
+flask
+flask-socketio
