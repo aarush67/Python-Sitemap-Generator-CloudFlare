@@ -1,5 +1,11 @@
-requests
+aiohttp
 beautifulsoup4
+cachetools
 dnspython
 flask
 flask-socketio
+lxml
+requests
+rich
+tenacity
+tqdm
