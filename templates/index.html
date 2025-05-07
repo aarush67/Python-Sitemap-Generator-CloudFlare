@@ -10,15 +10,21 @@
     <script src="https://cdn.jsdelivr.net/npm/axios@1.7.7/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.5/dist/socket.io.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.6/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body class="bg-gray-100 font-sans">
     <div id="root"></div>
+    <!-- Inject socket_port as a global variable -->
+    <script>
+        window.SOCKET_PORT = {{ socket_port | safe }};
+    </script>
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
         function App() {
             const [tld, setTld] = useState('');
             const [apiToken, setApiToken] = useState('');
+            const [securitytrailsApiKey, setSecuritytrailsApiKey] = useState('');
             const [respectRobots, setRespectRobots] = useState(true);
             const [timeout, setTimeout] = useState('5');
             const [useMultithreading, setUseMultithreading] = useState(false);
@@ -28,37 +34,91 @@
             const [includeSubdomains, setIncludeSubdomains] = useState('');
             const [excludeSubdomains, setExcludeSubdomains] = useState('');
             const [rateLimit, setRateLimit] = useState('1.0');
+            const [wordlistFile, setWordlistFile] = useState(null);
+            const [wordlistPath, setWordlistPath] = useState(null);
             const [logs, setLogs] = useState([]);
             const [isGenerating, setIsGenerating] = useState(false);
             const [showModal, setShowModal] = useState(false);
             const [estimatedTime, setEstimatedTime] = useState(0);
             const [generationCompleted, setGenerationCompleted] = useState(false);
+            const [progressData, setProgressData] = useState({ subdomains: [], urls: [], times: [] });
             const logRef = useRef(null);
             const socketRef = useRef(null);
+            const chartRef = useRef(null);
+            const chartInstanceRef = useRef(null);
 
             useEffect(() => {
-                socketRef.current = io();
+                // Connect to WebSocket using dynamic host and port
+                const socketHost = window.location.hostname;
+                const socketPort = window.SOCKET_PORT || '5000';
+                try {
+                    socketRef.current = io(`http://${socketHost}:${socketPort}`, { 
+                        path: '/socket.io',
+                        transports: ['websocket', 'polling']
+                    });
+                } catch (error) {
+                    setLogs((prev) => [...prev, `WebSocket connection failed: ${error.message}`]);
+                    return;
+                }
+                
+                socketRef.current.on('connect', () => {
+                    setLogs((prev) => [...prev, 'Connected to WebSocket server']);
+                });
+
+                socketRef.current.on('connect_error', (error) => {
+                    setLogs((prev) => [...prev, `WebSocket connection error: ${error.message}`]);
+                });
+
                 socketRef.current.on('log', (data) => {
                     setLogs((prev) => [...prev, data.message]);
                 });
 
-                const checkStatus = () => {
-                    axios.get('/status').then((response) => {
-                        setIsGenerating(response.data.is_generating);
-                        if (!response.data.is_generating && isGenerating) {
-                            setGenerationCompleted(true);
-                            setShowModal(false);
-                        }
+                socketRef.current.on('status', (data) => {
+                    setProgressData((prev) => {
+                        const newTimes = [...prev.times, Math.round((Date.now() - data.start_time * 1000) / 1000)];
+                        return {
+                            subdomains: [...prev.subdomains, data.subdomains_found],
+                            urls: [...prev.urls, data.urls_crawled],
+                            times: newTimes
+                        };
                     });
-                };
-                checkStatus();
+                    setIsGenerating(data.is_generating);
+                    if (!data.is_generating && isGenerating) {
+                        setGenerationCompleted(true);
+                        setShowModal(false);
+                        setLogs((prev) => [...prev, 'Sitemap generation completed']);
+                    }
+                });
 
+                const checkStatus = async () => {
+                    try {
+                        const response = await axios.get('/status');
+                        setIsGenerating(response.data.is_generating);
+                        setProgressData((prev) => {
+                            const newTimes = [...prev.times, Math.round((Date.now() - response.data.start_time * 1000) / 1000)];
+                            return {
+                                subdomains: [...prev.subdomains, response.data.subdomains_found],
+                                urls: [...prev.urls, response.data.urls_crawled],
+                                times: newTimes
+                            };
+                        });
+                    } catch (error) {
+                        setLogs((prev) => [...prev, `Status check failed: ${error.message}`]);
+                    }
+                };
+
+                checkStatus();
                 const interval = setInterval(() => {
                     checkStatus();
                     if (isGenerating) {
                         axios.get('/progress').then((response) => {
                             setEstimatedTime(response.data.estimated_time);
+                        }).catch((error) => {
+                            setLogs((prev) => [...prev, `Progress fetch failed: ${error.message}`]);
                         });
+                        if (socketRef.current.connected) {
+                            socketRef.current.emit('get_status');
+                        }
                     }
                 }, 1000);
 
@@ -74,31 +134,126 @@
                 }
             }, [logs]);
 
-            const handleStart = () => {
-                axios.post('/start', {
-                    tld,
-                    api_token: apiToken,
-                    respect_robots: respectRobots,
-                    timeout,
-                    use_multithreading: useMultithreading,
-                    max_workers: maxWorkers,
-                    max_depth: maxDepth,
-                    output_file: outputFile,
-                    include_subdomains: includeSubdomains,
-                    exclude_subdomains: excludeSubdomains,
-                    rate_limit: rateLimit
-                }).then((response) => {
+            useEffect(() => {
+                if (chartRef.current && !chartInstanceRef.current) {
+                    // Initialize chart only once
+                    const ctx = chartRef.current.getContext('2d');
+                    chartInstanceRef.current = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: [],
+                            datasets: [
+                                {
+                                    label: 'Subdomains Found',
+                                    data: [],
+                                    borderColor: 'rgb(75, 192, 192)',
+                                    tension: 0.1
+                                },
+                                {
+                                    label: 'URLs Crawled',
+                                    data: [],
+                                    borderColor: 'rgb(255, 99, 132)',
+                                    tension: 0.1
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            scales: {
+                                x: { title: { display: true, text: 'Time (seconds)' } },
+                                y: { title: { display: true, text: 'Count' }, beginAtZero: true }
+                            }
+                        }
+                    });
+                }
+
+                if (chartInstanceRef.current) {
+                    // Update chart data dynamically
+                    chartInstanceRef.current.data.labels = progressData.times;
+                    chartInstanceRef.current.data.datasets[0].data = progressData.subdomains;
+                    chartInstanceRef.current.data.datasets[1].data = progressData.urls;
+                    chartInstanceRef.current.update('none'); // Update without animation to avoid flicker
+                }
+
+                return () => {
+                    if (chartInstanceRef.current) {
+                        chartInstanceRef.current.destroy();
+                        chartInstanceRef.current = null;
+                    }
+                };
+            }, [progressData]);
+
+            const handleWordlistUpload = (e) => {
+                const file = e.target.files[0];
+                if (file && file.name.endsWith('.txt')) {
+                    setWordlistFile(file);
+                    setLogs((prev) => [...prev, `Selected wordlist: ${file.name}`]);
+                } else {
+                    setLogs((prev) => [...prev, 'Please upload a .txt file']);
+                }
+            };
+
+            const handleStart = async () => {
+                let wordlist_path = null;
+                if (wordlistFile) {
+                    const formData = new FormData();
+                    formData.append('wordlist', wordlistFile);
+                    try {
+                        const response = await axios.post('/upload-wordlist', formData);
+                        wordlist_path = response.data.wordlist_path;
+                        setWordlistPath(wordlist_path);
+                        setLogs((prev) => [...prev, `Wordlist uploaded: ${wordlist_path}`]);
+                    } catch (error) {
+                        setLogs((prev) => [...prev, `Error uploading wordlist: ${error.response?.data?.error || error.message}`]);
+                        return;
+                    }
+                }
+
+                try {
+                    await axios.post('/start', {
+                        tld,
+                        api_token: apiToken,
+                        securitytrails_api_key: securitytrailsApiKey,
+                        respect_robots: respectRobots,
+                        timeout: parseFloat(timeout),
+                        use_multithreading: useMultithreading,
+                        max_workers: maxWorkers === 'auto' ? maxWorkers : parseInt(maxWorkers),
+                        max_depth: parseInt(maxDepth),
+                        output_file: outputFile,
+                        include_subdomains: includeSubdomains,
+                        exclude_subdomains: excludeSubdomains,
+                        rate_limit: parseFloat(rateLimit),
+                        wordlist_path
+                    });
                     setIsGenerating(true);
                     setGenerationCompleted(false);
-                    setLogs([]);
+                    setLogs((prev) => [...prev, `Started sitemap generation for ${tld}`]);
+                    setProgressData({ subdomains: [], urls: [], times: [] });
                     setShowModal(true);
-                }).catch((error) => {
+                } catch (error) {
                     setLogs((prev) => [...prev, `Error: ${error.response?.data?.error || error.message}`]);
-                });
+                }
             };
 
             const handleDownload = () => {
                 window.location.href = `/download?output_file=${encodeURIComponent(outputFile)}`;
+                setLogs((prev) => [...prev, `Downloading sitemap: ${outputFile}`]);
+            };
+
+            const handleDownloadReport = () => {
+                window.location.href = `/download-report?tld=${encodeURIComponent(tld)}`;
+                setLogs((prev) => [...prev, `Downloading report for ${tld}`]);
+            };
+
+            const handleDownloadLogs = () => {
+                const blob = new Blob([logs.join('\n')], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'sitemap_logs.txt';
+                a.click();
+                URL.revokeObjectURL(url);
+                setLogs((prev) => [...prev, 'Downloaded logs']);
             };
 
             const closeModal = () => {
@@ -107,11 +262,11 @@
 
             return (
                 <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-3xl relative">
+                    <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-4xl relative">
                         <h1 className="text-2xl font-semibold text-gray-800 mb-6">Sitemap Generator</h1>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
-                                <label className="block text-gray-700">Top-Level Domain (e.g., techfixpro.net)</label>
+                                <label className="block text-gray-700">Top-Level Domain (e.g., example.com)</label>
                                 <input
                                     type="text"
                                     value={tld}
@@ -121,7 +276,7 @@
                                 />
                             </div>
                             <div>
-                                <label className="block text-gray-700">Cloudflare API Token</label>
+                                <label className="block text-gray-700">Cloudflare API Token (Optional)</label>
                                 <input
                                     type="password"
                                     value={apiToken}
@@ -131,13 +286,34 @@
                                 />
                             </div>
                             <div>
+                                <label className="block text-gray-700">SecurityTrails API Key (Optional)</label>
+                                <input
+                                    type="password"
+                                    value={securitytrailsApiKey}
+                                    onChange={(e) => setSecuritytrailsApiKey(e.target.value)}
+                                    className="mt-1 w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-gray-300"
+                                    disabled={isGenerating}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Custom Wordlist (.txt, Optional)</label>
+                                <input
+                                    type="file"
+                                    accept=".txt"
+                                    onChange={handleWordlistUpload}
+                                    className="mt-1 w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-gray-300"
+                                    disabled={isGenerating}
+                                />
+                            </div>
+                            <div>
                                 <label className="block text-gray-700">Timeout (seconds, default: 5)</label>
                                 <input
-                                    type="text"
+                                    type="number"
                                     value={timeout}
                                     onChange={(e) => setTimeout(e.target.value)}
                                     className="mt-1 w-24 p-2 border rounded focus:outline-none focus:ring-2 focus:ring-gray-300"
                                     disabled={isGenerating}
+                                    min="0"
                                 />
                             </div>
                             <div>
@@ -153,25 +329,28 @@
                             <div>
                                 <label className="block text-gray-700">Max Crawl Depth (default: 5)</label>
                                 <input
-                                    type="text"
+                                    type="number"
                                     value={maxDepth}
                                     onChange={(e) => setMaxDepth(e.target.value)}
                                     className="mt-1 w-24 p-2 border rounded focus:outline-none focus:ring-2 focus:ring-gray-300"
                                     disabled={isGenerating}
+                                    min="0"
                                 />
                             </div>
                             <div>
                                 <label className="block text-gray-700">Rate Limit (seconds, default: 1.0)</label>
                                 <input
-                                    type="text"
+                                    type="number"
+                                    step="0.1"
                                     value={rateLimit}
                                     onChange={(e) => setRateLimit(e.target.value)}
                                     className="mt-1 w-24 p-2 border rounded focus:outline-none focus:ring-2 focus:ring-gray-300"
                                     disabled={isGenerating}
+                                    min="0"
                                 />
                             </div>
                             <div>
-                                <label className="block text-gray-700">Include Subdomains (comma-separated)</label>
+                                <label className="block text-gray-700">Include Subdomains (comma-separated, Optional)</label>
                                 <input
                                     type="text"
                                     value={includeSubdomains}
@@ -181,7 +360,7 @@
                                 />
                             </div>
                             <div>
-                                <label className="block text-gray-700">Exclude Subdomains (comma-separated)</label>
+                                <label className="block text-gray-700">Exclude Subdomains (comma-separated, Optional)</label>
                                 <input
                                     type="text"
                                     value={excludeSubdomains}
@@ -213,11 +392,12 @@
                             <div>
                                 <label className="block text-gray-700">Number of Cores (default: 4)</label>
                                 <input
-                                    type="text"
+                                    type="number"
                                     value={maxWorkers}
                                     onChange={(e) => setMaxWorkers(e.target.value)}
                                     className="mt-1 w-24 p-2 border rounded focus:outline-none focus:ring-2 focus:ring-gray-300"
                                     disabled={isGenerating || !useMultithreading}
+                                    min="1"
                                 />
                             </div>
                         </div>
@@ -232,17 +412,31 @@
                                 {isGenerating ? 'Generating...' : 'Generate Sitemap'}
                             </button>
                             {generationCompleted && (
-                                <button
-                                    onClick={handleDownload}
-                                    className="w-full py-2 mt-2 rounded text-white font-semibold bg-blue-600 hover:bg-blue-700 transition-colors"
-                                >
-                                    Download Sitemap
-                                </button>
+                                <div className="flex space-x-2 mt-2">
+                                    <button
+                                        onClick={handleDownload}
+                                        className="w-full py-2 rounded text-white font-semibold bg-blue-600 hover:bg-blue-700 transition-colors"
+                                    >
+                                        Download Sitemap
+                                    </button>
+                                    <button
+                                        onClick={handleDownloadReport}
+                                        className="w-full py-2 rounded text-white font-semibold bg-green-600 hover:bg-green-700 transition-colors"
+                                    >
+                                        Download Report
+                                    </button>
+                                    <button
+                                        onClick={handleDownloadLogs}
+                                        className="w-full py-2 rounded text-white font-semibold bg-purple-600 hover:bg-purple-700 transition-colors"
+                                    >
+                                        Download Logs
+                                    </button>
+                                </div>
                             )}
                         </div>
                         {isGenerating && (
                             <div className="mt-4 flex items-center justify-center">
-                                <svg className="animate-spin h-6 w-6 text-gray-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <svg className="animate-spin h-6 w-6 text-gray  text-gray-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                 </svg>
@@ -254,6 +448,10 @@
                                 Sitemap generation completed!
                             </div>
                         )}
+                        <div className="mt-6">
+                            <label className="block text-gray-700">Progress Dashboard</label>
+                            <canvas ref={chartRef} className="mt-2"></canvas>
+                        </div>
                         <div className="mt-6">
                             <label className="block text-gray-700">Logs</label>
                             <div
@@ -274,7 +472,7 @@
                                 <div className="bg-white rounded-lg p-6 max-w-md w-full">
                                     <h2 className="text-xl font-semibold text-gray-800 mb-4">Processing Your Request</h2>
                                     <p className="text-gray-700 mb-6">
-                                        This may take a while depending on the site size and settings, hold tight!
+                                        This may take a while depending on the site size and settings. Please wait.
                                     </p>
                                     <button
                                         onClick={closeModal}
